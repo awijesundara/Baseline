@@ -1,0 +1,13 @@
+---
+- name: Collect OSBaseline evidence without changing host configuration
+  hosts: baseline_targets
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Read Linux operating system and hardware state
+      ansible.builtin.script:
+        cmd: collect.py
+        executable: /bin/sh
+      changed_when: false
+      register: baseline_snapshot
+      no_log: true
