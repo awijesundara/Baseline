@@ -1,9 +1,9 @@
-# OSBaseline
+# Baseline
 
 Agentless OS/kernel/firmware baseline verification for HFT servers, built to
 back "verified" evidence on ServiceOps and FlowOps upgrade tickets.
 
-OSBaseline never installs anything on a managed host. It connects over SSH
+Baseline never installs anything on a managed host. It connects over SSH
 with Ansible, runs a single read-only Python script, and evaluates the
 result against an immutable, versioned baseline policy. Nothing it collects
 is ever used to change a host.
@@ -11,7 +11,7 @@ is ever used to change a host.
 ## Why this exists
 
 An OS/firmware upgrade ticket (ServiceOps CHG/CTASK, FlowOps task) says the
-work is done. OSBaseline is the independent evidence that it actually is:
+work is done. Baseline is the independent evidence that it actually is:
 the right kernel is running *and installed as the default boot entry*, the
 required DKMS module matches the running kernel, no service is in a failed
 state, time sync is healthy, and (for CentOS 7) the host isn't silently
@@ -23,26 +23,26 @@ the host set the ticket names.
 ## Architecture
 
 ```
-┌─────────────┐      SSH (Ansible)     ┌──────────────┐
-│  OSBaseline │ ─────────────────────▶ │  Managed host │
-│  controller │   runs collect.py,     │  (no agent)   │
-│             │   nothing persists     └──────────────┘
-└──────┬──────┘
-       │ HTTP (Bearer token)
-       ▼
+┌───────────────┐    SSH (Ansible)     ┌──────────────┐
+│   Baseline    │ ───────────────────▶ │  Managed host │
+│   controller  │   runs collect.py,   │  (no agent)   │
+│               │   nothing persists   └──────────────┘
+└───────┬───────┘
+        │ HTTP (Bearer token)
+        ▼
 ┌─────────────────────┐
 │ ServiceOps / FlowOps │  GET /api/verification?external_system=...&ticket_id=...
 └─────────────────────┘
 ```
 
-- `osbaseline/server.py` — a dependency-free `http.server` app (matches the
+- `baseline/server.py` — a dependency-free `http.server` app (matches the
   zero-framework style of FlowOps) serving both the JSON API and the static
-  web UI. Single SQLite file (`osbaseline/store.py`) holds hosts, baseline
+  web UI. Single SQLite file (`baseline/store.py`) holds hosts, baseline
   revisions, ticket bindings, collection runs, and an append-only audit log.
-- `osbaseline/policy.py` — strict, fail-closed evaluation. A field the
+- `baseline/policy.py` — strict, fail-closed evaluation. A field the
   collector couldn't read evaluates as `unknown`, which fails any check
   that requires it. There is no way to "match" an unreadable fact.
-- `osbaseline/runner.py` — builds a throwaway Ansible inventory per run,
+- `baseline/runner.py` — builds a throwaway Ansible inventory per run,
   invokes `ansible-playbook` under a process group so a timeout kills SSH
   children too, and collects evidence only through the file the callback
   plugin owns (`ansible/callback_plugins/baseline.py`) — the playbook's
@@ -60,9 +60,9 @@ the host set the ticket names.
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install ansible-core   # only the controller needs this; managed hosts need nothing
-export OSBASELINE_ADMIN_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(24))")
-export OSBASELINE_ALLOWED_NETWORKS=10.0.0.0/8   # comma-separated CIDRs of your management VLAN
-python3 -m osbaseline.server
+export BASELINE_ADMIN_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(24))")
+export BASELINE_ALLOWED_NETWORKS=10.0.0.0/8   # comma-separated CIDRs of your management VLAN
+python3 -m baseline.server
 ```
 
 Open `http://127.0.0.1:8090`, sign in with the admin token, register a host,
@@ -79,14 +79,14 @@ network or real SSH required — the Ansible invocation is mocked at the
 
 | Variable | Purpose |
 |---|---|
-| `OSBASELINE_ADMIN_TOKEN` | Required, ≥32 chars. Full read/write access. |
-| `OSBASELINE_INTEGRATION_TOKEN` | Optional, ≥32 chars. Can start collection runs and read everything; cannot create hosts/baselines/bindings. Give this one to ServiceOps/FlowOps. |
-| `OSBASELINE_READ_TOKEN` | Optional, ≥32 chars. Read-only. |
-| `OSBASELINE_ALLOWED_NETWORKS` | Comma-separated CIDRs. A host address outside every listed range, or loopback/link-local/multicast, is rejected at creation and re-checked at run time. |
-| `OSBASELINE_SSH_KEY` / `OSBASELINE_KNOWN_HOSTS` | Paths used for every collection run. Host key checking is always on (`StrictHostKeyChecking=yes`); there is no way to disable it. |
-| `OSBASELINE_ANSIBLE` | `ansible-playbook` binary path (default: resolved from `PATH`). |
-| `OSBASELINE_DB` | SQLite path (default `data/baseline.db`). |
-| `OSBASELINE_BIND` / `OSBASELINE_PORT` | Listen address (default `127.0.0.1:8090`). |
+| `BASELINE_ADMIN_TOKEN` | Required, ≥32 chars. Full read/write access. |
+| `BASELINE_INTEGRATION_TOKEN` | Optional, ≥32 chars. Can start collection runs and read everything; cannot create hosts/baselines/bindings. Give this one to ServiceOps/FlowOps. |
+| `BASELINE_READ_TOKEN` | Optional, ≥32 chars. Read-only. |
+| `BASELINE_ALLOWED_NETWORKS` | Comma-separated CIDRs. A host address outside every listed range, or loopback/link-local/multicast, is rejected at creation and re-checked at run time. |
+| `BASELINE_SSH_KEY` / `BASELINE_KNOWN_HOSTS` | Paths used for every collection run. Host key checking is always on (`StrictHostKeyChecking=yes`); there is no way to disable it. |
+| `BASELINE_ANSIBLE` | `ansible-playbook` binary path (default: resolved from `PATH`). |
+| `BASELINE_DB` | SQLite path (default `data/baseline.db`). |
+| `BASELINE_BIND` / `BASELINE_PORT` | Listen address (default `127.0.0.1:8090`). |
 
 Three role tokens, not one: the *admin* role manages inventory and
 baselines; the *integration* role (meant for ServiceOps/FlowOps to hold) can
@@ -125,7 +125,7 @@ integration token may also call.
 
 ### What "verified" actually requires
 
-`verification()` in `osbaseline/server.py` — every one of these, checked
+`verification()` in `baseline/server.py` — every one of these, checked
 server-side, not something a caller can weaken:
 
 1. The **newest** run for that binding has `status == "pass"` (an older
@@ -141,11 +141,11 @@ server-side, not something a caller can weaken:
 
 Neither integration is built yet — this is the contract to build against:
 
-1. Add an admin-configurable OSBaseline connection (base URL + the
+1. Add an admin-configurable Baseline connection (base URL + the
    integration-role bearer token), stored the same way ServiceOps already
    stores its NetBox/webhook credentials.
 2. When a CHG/CTASK (ServiceOps) or upgrade task (FlowOps) is created for
-   an OS/firmware change, call `POST /api/bindings` on OSBaseline with the
+   an OS/firmware change, call `POST /api/bindings` on Baseline with the
    ticket's external system + ID, the affected hosts, and the approved
    baseline revision — ideally right when the change is approved, so
    `not_before` can be set to the planned implementation window.
@@ -155,7 +155,7 @@ Neither integration is built yet — this is the contract to build against:
    `status` value as a badge. Only offer a "Mark verified" ticket action
    when `verified: true`.
 4. After the implementer runs the actual upgrade, either they or an
-   automation step calls `POST /api/runs` on OSBaseline; the ticket badge
+   automation step calls `POST /api/runs` on Baseline; the ticket badge
    updates on next poll.
 
 ## Security posture
@@ -166,7 +166,7 @@ Neither integration is built yet — this is the contract to build against:
 - SSH host key checking is mandatory (`StrictHostKeyChecking=yes`); there
   is no configuration path that disables it.
 - Management addresses are restricted to explicit CIDRs
-  (`OSBASELINE_ALLOWED_NETWORKS`) and loopback/link-local/multicast/
+  (`BASELINE_ALLOWED_NETWORKS`) and loopback/link-local/multicast/
   unspecified are always rejected, both when a host is registered and
   again at run time (defense against a later config change silently
   widening scope).
@@ -185,7 +185,7 @@ Neither integration is built yet — this is the contract to build against:
 - ServiceOps and FlowOps integration (the actual "Verified" button) is not
   implemented yet — see the contract above.
 - No systemd unit / container image yet; run as a supervised process
-  (`ExecStart=... python3 -m osbaseline.server`) behind the same reverse
+  (`ExecStart=... python3 -m baseline.server`) behind the same reverse
   proxy pattern used for ServiceOps/FlowOps.
 - No TLS termination built in — deploy behind a TLS-terminating proxy, same
   as FlowOps.

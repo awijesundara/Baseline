@@ -17,7 +17,7 @@ def validate_address(address, networks):
     if addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified:
         raise ValueError('Loopback, link-local, multicast and unspecified targets are forbidden')
     if not any(addr in ipaddress.ip_network(n.strip()) for n in networks if n.strip()):
-        raise ValueError('Management IP is outside OSBASELINE_ALLOWED_NETWORKS')
+        raise ValueError('Management IP is outside BASELINE_ALLOWED_NETWORKS')
     return str(addr)
 
 def execute(run_id, db_path, settings):
@@ -27,7 +27,7 @@ def execute(run_id, db_path, settings):
     report['started_at'] = time.time()
     status = 'error'
     try:
-        with tempfile.TemporaryDirectory(prefix='osbaseline-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='baseline-') as tmp:
             evidence = Path(tmp) / 'evidence.jsonl'
             inventory = {'all': {'children': {'baseline_targets': {'hosts': {}}}}}
             for host in run['hosts']:
@@ -39,11 +39,11 @@ def execute(run_id, db_path, settings):
                 }
             inv = Path(tmp) / 'inventory.json'
             inv.write_text(json.dumps(inventory))
-            env = {k: v for k, v in os.environ.items() if not k.startswith('ANSIBLE_') and k not in {'OSBASELINE_ADMIN_TOKEN', 'OSBASELINE_INTEGRATION_TOKEN', 'OSBASELINE_READ_TOKEN'}}
+            env = {k: v for k, v in os.environ.items() if not k.startswith('ANSIBLE_') and k not in {'BASELINE_ADMIN_TOKEN', 'BASELINE_INTEGRATION_TOKEN', 'BASELINE_READ_TOKEN'}}
             env.update({'ANSIBLE_CONFIG': str(ROOT / 'ansible/ansible.cfg'),
                         'ANSIBLE_CALLBACK_PLUGINS': str(ROOT / 'ansible/callback_plugins'),
                         'ANSIBLE_CALLBACKS_ENABLED': 'baseline', 'ANSIBLE_HOST_KEY_CHECKING': 'True',
-                        'ANSIBLE_RETRY_FILES_ENABLED': 'False', 'OSBASELINE_EVIDENCE_FILE': str(evidence)})
+                        'ANSIBLE_RETRY_FILES_ENABLED': 'False', 'BASELINE_EVIDENCE_FILE': str(evidence)})
             # A process group allows timeout to stop Ansible and its SSH children.
             with open(os.devnull, 'w') as output:
                 proc = subprocess.Popen([settings['ansible'], '-i', str(inv), str(ROOT / 'ansible/verify.yml'), '--forks', '5', '--timeout', '15'],

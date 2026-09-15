@@ -1,4 +1,4 @@
-"""OSBaseline single-controller preview: durable jobs and scoped HTTP API."""
+"""Baseline single-controller preview: durable jobs and scoped HTTP API."""
 import hmac
 import json
 import os
@@ -17,17 +17,17 @@ from .store import init, connect, get, audit
 ROOT = Path(__file__).resolve().parents[1]
 
 def configuration():
-    token = os.environ.get('OSBASELINE_ADMIN_TOKEN', '')
-    if len(token) < 32: raise ValueError('Set OSBASELINE_ADMIN_TOKEN to a random secret of at least 32 characters')
-    tokens = {'admin': token, 'integration': os.environ.get('OSBASELINE_INTEGRATION_TOKEN', ''), 'reader': os.environ.get('OSBASELINE_READ_TOKEN', '')}
+    token = os.environ.get('BASELINE_ADMIN_TOKEN', '')
+    if len(token) < 32: raise ValueError('Set BASELINE_ADMIN_TOKEN to a random secret of at least 32 characters')
+    tokens = {'admin': token, 'integration': os.environ.get('BASELINE_INTEGRATION_TOKEN', ''), 'reader': os.environ.get('BASELINE_READ_TOKEN', '')}
     populated = [v for v in tokens.values() if v]
     if any(len(v) < 32 for v in populated) or len(set(populated)) != len(populated):
         raise ValueError('Configured role tokens must be distinct and at least 32 characters')
-    return {'tokens': tokens, 'db': os.environ.get('OSBASELINE_DB', str(ROOT / 'data/baseline.db')),
-            'networks': os.environ.get('OSBASELINE_ALLOWED_NETWORKS', '').split(','),
-            'ssh_key': os.environ.get('OSBASELINE_SSH_KEY', '/run/secrets/ssh_key'),
-            'known_hosts': os.environ.get('OSBASELINE_KNOWN_HOSTS', '/run/secrets/known_hosts'),
-            'ansible': os.environ.get('OSBASELINE_ANSIBLE', 'ansible-playbook'), 'timeout': 300}
+    return {'tokens': tokens, 'db': os.environ.get('BASELINE_DB', str(ROOT / 'data/baseline.db')),
+            'networks': os.environ.get('BASELINE_ALLOWED_NETWORKS', '').split(','),
+            'ssh_key': os.environ.get('BASELINE_SSH_KEY', '/run/secrets/ssh_key'),
+            'known_hosts': os.environ.get('BASELINE_KNOWN_HOSTS', '/run/secrets/known_hosts'),
+            'ansible': os.environ.get('BASELINE_ANSIBLE', 'ansible-playbook'), 'timeout': 300}
 
 def document(db, table, identifier, value):
     db.execute(f'INSERT INTO {table}(id,document) VALUES(?,?)', (identifier, json.dumps(value)))
@@ -203,8 +203,8 @@ def make_server(settings, address=('127.0.0.1', 8090), start_worker=True):
     return server
 
 def main():
-    server = make_server(configuration(), (os.environ.get('OSBASELINE_BIND', '127.0.0.1'), int(os.environ.get('OSBASELINE_PORT', '8090'))))
-    print('OSBaseline listening on port ' + str(server.server_port), flush=True)
+    server = make_server(configuration(), (os.environ.get('BASELINE_BIND', '127.0.0.1'), int(os.environ.get('BASELINE_PORT', '8090'))))
+    print('Baseline listening on port ' + str(server.server_port), flush=True)
     try: server.serve_forever()
     finally:
         server.stop_worker.set()

@@ -8,10 +8,10 @@ import unittest
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from unittest.mock import patch
-from osbaseline.policy import evaluate, validate
-from osbaseline.runner import execute, validate_address
-from osbaseline.server import make_server, verification
-from osbaseline.store import connect, init
+from baseline.policy import evaluate, validate
+from baseline.runner import execute, validate_address
+from baseline.server import make_server, verification
+from baseline.store import connect, init
 
 POLICY = {'name':'Rocky 9 target', 'checks':[{'id':'kernel','field':'kernel.release','op':'eq','expected':'5.14.0-target'}]}
 
@@ -125,12 +125,12 @@ class ApiTests(unittest.TestCase):
     def test_callback_evidence_and_all_host_gate(self):
         b=self.setup_binding();_,run=self.request('/api/runs',{'binding_id':b['id']})
         def process(argv,**kwargs):
-            Path(kwargs['env']['OSBASELINE_EVIDENCE_FILE']).write_text(json.dumps({'host':b['host_ids'][0],'facts':{'kernel.release':'5.14.0-target'}})+'\n')
-            self.assertNotIn('OSBASELINE_ADMIN_TOKEN',kwargs['env'])
+            Path(kwargs['env']['BASELINE_EVIDENCE_FILE']).write_text(json.dumps({'host':b['host_ids'][0],'facts':{'kernel.release':'5.14.0-target'}})+'\n')
+            self.assertNotIn('BASELINE_ADMIN_TOKEN',kwargs['env'])
             class Proc:
                 def wait(self,timeout=None):return 0
             return Proc()
-        with patch('osbaseline.runner.subprocess.Popen',side_effect=process):execute(run['id'],self.settings['db'],self.settings)
+        with patch('baseline.runner.subprocess.Popen',side_effect=process):execute(run['id'],self.settings['db'],self.settings)
         self.assertTrue(self.request('/api/bindings/'+b['id']+'/verification')[1]['verified'])
 
 if __name__=='__main__':unittest.main()

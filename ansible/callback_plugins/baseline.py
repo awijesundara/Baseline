@@ -17,5 +17,5 @@ class CallbackModule(CallbackBase):
             if not isinstance(facts, dict): return
         except (ValueError, TypeError):
             return
-        with open(os.environ['OSBASELINE_EVIDENCE_FILE'], 'a') as f:
+        with open(os.environ['BASELINE_EVIDENCE_FILE'], 'a') as f:
             f.write(json.dumps({'host': result._host.get_name(), 'facts': facts}) + '\n')
