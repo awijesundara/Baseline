@@ -8,6 +8,7 @@ COPY baseline ./baseline
 COPY static ./static
 COPY ansible ./ansible
 COPY examples ./examples
+COPY COMMIT ./COMMIT
 RUN useradd --create-home --shell /usr/sbin/nologin baseline \
     && mkdir -p /app/data && chown -R baseline:baseline /app
 USER baseline

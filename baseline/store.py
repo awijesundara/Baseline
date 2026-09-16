@@ -26,6 +26,8 @@ def init(path):
         CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, created REAL NOT NULL, status TEXT NOT NULL, document TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY, document TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, created REAL NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, subject TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, role TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, username TEXT NOT NULL, role TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL);
         ''')
         # An interrupted collection can never become a verified result.
         db.execute("UPDATE runs SET status='error' WHERE status='running'")

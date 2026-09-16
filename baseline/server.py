@@ -8,25 +8,43 @@ import secrets
 import shutil
 import threading
 import time
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
+from . import auth, __version__
 from .policy import FIELDS, OPS, validate, digest
 from .runner import execute, validate_address
 from .store import init, connect, get, audit
 
 ROOT = Path(__file__).resolve().parents[1]
+COMMIT = (ROOT / 'COMMIT').read_text().strip() if (ROOT / 'COMMIT').is_file() else 'dev'
+VERSION = f'{__version__}+{COMMIT}'
+
+USERNAME_RE = re.compile(r'[a-z][a-z0-9_.-]{2,31}')
 
 def configuration():
-    token = os.environ.get('BASELINE_ADMIN_TOKEN', '')
-    if len(token) < 32: raise ValueError('Set BASELINE_ADMIN_TOKEN to a random secret of at least 32 characters')
-    tokens = {'admin': token, 'integration': os.environ.get('BASELINE_INTEGRATION_TOKEN', ''), 'reader': os.environ.get('BASELINE_READ_TOKEN', '')}
-    populated = [v for v in tokens.values() if v]
-    if any(len(v) < 32 for v in populated) or len(set(populated)) != len(populated):
-        raise ValueError('Configured role tokens must be distinct and at least 32 characters')
-    return {'tokens': tokens, 'db': os.environ.get('BASELINE_DB', str(ROOT / 'data/baseline.db')),
+    admin_user = os.environ.get('BASELINE_ADMIN_USERNAME', '')
+    admin_password = os.environ.get('BASELINE_ADMIN_PASSWORD', '')
+    if not USERNAME_RE.fullmatch(admin_user): raise ValueError('Set BASELINE_ADMIN_USERNAME to a lowercase username (letters/digits/._- , 3-32 chars)')
+    if len(admin_password) < 12: raise ValueError('Set BASELINE_ADMIN_PASSWORD to a passphrase of at least 12 characters')
+    integration_token = os.environ.get('BASELINE_INTEGRATION_TOKEN', '')
+    if integration_token and len(integration_token) < 32: raise ValueError('BASELINE_INTEGRATION_TOKEN must be at least 32 characters')
+    # Host-key trust is pluggable (see runner.ssh_common_args): a static
+    # known_hosts file is the default, but BASELINE_KNOWN_HOSTS_COMMAND lets a
+    # site with centrally managed host keys (e.g. FreeIPA/SSSD's
+    # sss_ssh_knownhostsproxy) delegate trust to that system instead. Setting
+    # BASELINE_KNOWN_HOSTS_COMMAND opts out of the file default so the two
+    # can't silently both apply.
+    known_hosts_command = os.environ.get('BASELINE_KNOWN_HOSTS_COMMAND', '')
+    known_hosts = os.environ.get('BASELINE_KNOWN_HOSTS', '' if known_hosts_command else '/run/secrets/known_hosts')
+    if known_hosts and known_hosts_command:
+        raise ValueError('Set only one of BASELINE_KNOWN_HOSTS or BASELINE_KNOWN_HOSTS_COMMAND')
+    return {'admin_user': admin_user, 'admin_password': admin_password, 'integration_token': integration_token,
+            'db': os.environ.get('BASELINE_DB', str(ROOT / 'data/baseline.db')),
             'networks': os.environ.get('BASELINE_ALLOWED_NETWORKS', '').split(','),
             'ssh_key': os.environ.get('BASELINE_SSH_KEY', '/run/secrets/ssh_key'),
-            'known_hosts': os.environ.get('BASELINE_KNOWN_HOSTS', '/run/secrets/known_hosts'),
+            'ssh_cert': os.environ.get('BASELINE_SSH_CERT', ''),
+            'known_hosts': known_hosts, 'known_hosts_command': known_hosts_command,
             'ansible': os.environ.get('BASELINE_ANSIBLE', 'ansible-playbook'), 'timeout': 300}
 
 def document(db, table, identifier, value):
@@ -57,7 +75,7 @@ def verification(db, binding):
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
 
-    def send(self, data, status=200, content_type='application/json'):
+    def send(self, data, status=200, content_type='application/json', headers=None):
         body = json.dumps(data).encode() if content_type == 'application/json' else data
         self.send_response(status)
         self.send_header('Content-Type', content_type)
@@ -65,13 +83,26 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+        for key, value in (headers or {}).items(): self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
-    def role(self):
+    def session_token(self):
+        header = self.headers.get('Cookie')
+        if not header: return None
+        jar = SimpleCookie()
+        jar.load(header)
+        morsel = jar.get(auth.COOKIE_NAME)
+        return morsel.value if morsel else None
+
+    def role(self, db):
         supplied = self.headers.get('Authorization', '').removeprefix('Bearer ')
-        for role, token in self.server.settings['tokens'].items():
-            if token and hmac.compare_digest(supplied, token): return role
+        integration = self.server.settings['integration_token']
+        if integration and supplied and hmac.compare_digest(supplied, integration): return 'integration', 'integration'
+        token = self.session_token()
+        if token:
+            session = auth.lookup_session(db, token)
+            if session: return session
         return None
 
     def do_GET(self): self.dispatch('GET')
@@ -83,30 +114,45 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if method == 'GET' and path in {'/health', '/ready'}:
                 with connect(settings['db']) as db: db.execute('SELECT 1').fetchone()
-                return self.send({'status': 'ok'})
+                return self.send({'status': 'ok', 'version': VERSION})
             static = {'/': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css'}
             if method == 'GET' and path in static:
                 name = static[path]
                 return self.send((ROOT / 'static' / name).read_bytes(), content_type={'html': 'text/html; charset=utf-8', 'js': 'text/javascript', 'css': 'text/css'}[name.split('.')[-1]])
-            role = self.role()
-            if not role: return self.send({'error': 'Authentication required'}, 401)
             if method == 'POST':
-                if role == 'reader': return self.send({'error': 'Read-only credential'}, 403)
                 origin = self.headers.get('Origin')
-                if origin and urlsplit(origin).netloc != self.headers.get('Host'): return self.send({'error': 'Cross-origin request denied'}, 403)
+                mismatched = bool(origin) and urlsplit(origin).netloc != self.headers.get('Host')
+                # A session cookie is the only ambient credential a browser
+                # attaches automatically; a request carrying one but no
+                # Origin header at all is exactly the shape a legacy browser
+                # ignoring SameSite would produce in a cross-site POST, so it
+                # is rejected rather than silently let through. Bearer-token
+                # callers (integration) never send this cookie and are
+                # unaffected.
+                if mismatched or (self.session_token() and not origin): return self.send({'error': 'Cross-origin request denied'}, 403)
                 if self.headers.get('Content-Type', '').split(';')[0] != 'application/json': raise ValueError('JSON body required')
                 length = int(self.headers.get('Content-Length', '0'))
                 if not 0 < length <= 128000: raise ValueError('Body must be 1–128000 bytes')
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict): raise ValueError('JSON object required')
             with connect(settings['db']) as db:
+                if method == 'POST' and path == '/api/login': return self.login(db, payload)
+                if method == 'POST' and path == '/api/logout': return self.logout(db)
+                identity = self.role(db)
+                if not identity: return self.send({'error': 'Authentication required'}, 401)
+                role, actor = identity
+                if method == 'POST' and role == 'reader': return self.send({'error': 'Read-only credential'}, 403)
                 if method == 'GET':
                     if path == '/api/templates':
                         return self.send({'data': [json.loads(p.read_text()) for p in sorted((ROOT / 'examples').glob('*.json'))]})
                     if path == '/api/catalog':
-                        return self.send({'fields': sorted(FIELDS), 'operators': sorted(OPS), 'role': role,
+                        host_keys_configured = Path(settings['known_hosts']).is_file() if settings['known_hosts'] else bool(settings['known_hosts_command'])
+                        return self.send({'fields': sorted(FIELDS), 'operators': sorted(OPS), 'role': role, 'username': actor, 'version': VERSION,
                                           'runner_available': bool(shutil.which(settings['ansible'])),
-                                          'ssh_configured': Path(settings['ssh_key']).is_file() and Path(settings['known_hosts']).is_file()})
+                                          'ssh_configured': Path(settings['ssh_key']).is_file() and host_keys_configured})
+                    if path == '/api/users' and role == 'admin':
+                        rows = db.execute('SELECT username,role FROM users ORDER BY username').fetchall()
+                        return self.send({'data': [dict(r) for r in rows]})
                     for table in ('hosts', 'baselines', 'bindings', 'runs'):
                         if path == '/api/' + table:
                             rows = db.execute(f'SELECT * FROM {table}' + (' ORDER BY created DESC LIMIT 100' if table == 'runs' else ' ORDER BY rowid DESC')).fetchall()
@@ -137,8 +183,44 @@ class Handler(BaseHTTPRequestHandler):
                         return self.send(run)
                 elif method == 'POST':
                     identifier = secrets.token_hex(12)
-                    if path in {'/api/hosts', '/api/baselines', '/api/bindings'} and role != 'admin':
+                    if path in {'/api/hosts', '/api/baselines', '/api/bindings', '/api/users'} and role != 'admin':
                         return self.send({'error': 'Administrator credential required'}, 403)
+                    if path == '/api/users':
+                        username = str(payload.get('username', '')).strip().lower()
+                        password = str(payload.get('password', ''))
+                        urole = payload.get('role')
+                        if not USERNAME_RE.fullmatch(username): raise ValueError('Username must be lowercase letters/digits/._- , 3-32 chars')
+                        if len(password) < 12: raise ValueError('Password must be at least 12 characters')
+                        if urole not in {'admin', 'reader'}: raise ValueError('role must be admin or reader')
+                        if db.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone(): raise ValueError('That username already exists')
+                        db.execute('INSERT INTO users(username,password_hash,role) VALUES(?,?,?)', (username, auth.hash_password(password), urole))
+                        item = {'username': username, 'role': urole}
+                        audit(db, actor, 'users.created', username)
+                        db.commit()
+                        return self.send(item, 201)
+                    match = re.fullmatch(r'/api/users/(' + USERNAME_RE.pattern + r')/revoke', path)
+                    if match:
+                        if role != 'admin': return self.send({'error': 'Administrator credential required'}, 403)
+                        target = db.execute('SELECT role FROM users WHERE username=?', (match[1],)).fetchone()
+                        if target is None: raise ValueError('No such user')
+                        remaining_admins = db.execute("SELECT COUNT(*) AS n FROM users WHERE role='admin'").fetchone()['n']
+                        if target['role'] == 'admin' and remaining_admins <= 1: raise ValueError('Cannot revoke the only administrator account')
+                        db.execute('DELETE FROM users WHERE username=?', (match[1],))
+                        auth.delete_sessions_for(db, match[1])
+                        audit(db, actor, 'users.revoked', match[1])
+                        db.commit()
+                        return self.send({'username': match[1], 'revoked': True})
+                    match = re.fullmatch(r'/api/users/(' + USERNAME_RE.pattern + r')/reset', path)
+                    if match:
+                        if role != 'admin': return self.send({'error': 'Administrator credential required'}, 403)
+                        password = str(payload.get('password', ''))
+                        if len(password) < 12: raise ValueError('Password must be at least 12 characters')
+                        if not db.execute('SELECT 1 FROM users WHERE username=?', (match[1],)).fetchone(): raise ValueError('No such user')
+                        db.execute('UPDATE users SET password_hash=? WHERE username=?', (auth.hash_password(password), match[1]))
+                        auth.delete_sessions_for(db, match[1])
+                        audit(db, actor, 'users.password_reset', match[1])
+                        db.commit()
+                        return self.send({'username': match[1], 'reset': True})
                     if path == '/api/hosts':
                         name = str(payload.get('name', '')).strip()
                         user = str(payload.get('ssh_user', ''))
@@ -176,7 +258,7 @@ class Handler(BaseHTTPRequestHandler):
                         item = {'id': identifier, 'binding_id': binding['id'], 'baseline': get(db, 'baselines', binding['baseline_id']), 'hosts': [get(db, 'hosts', h) for h in binding['host_ids']], 'status': 'queued', 'created_at': time.time()}
                         db.execute('INSERT INTO runs VALUES(?,?,?,?)', (identifier, item['created_at'], 'queued', json.dumps(item)))
                     else: return self.send({'error': 'Not found'}, 404)
-                    audit(db, role, path[5:] + '.created', identifier)
+                    audit(db, actor, path[5:] + '.created', identifier)
                     db.commit()
                     return self.send(item, 201)
             return self.send({'error': 'Not found'}, 404)
@@ -184,6 +266,26 @@ class Handler(BaseHTTPRequestHandler):
             return self.send({'error': str(exc)}, 400)
         except Exception:
             return self.send({'error': 'Internal server error'}, 500)
+
+    def login(self, db, payload):
+        username = str(payload.get('username', '')).strip().lower()
+        password = str(payload.get('password', ''))
+        row = db.execute('SELECT password_hash,role FROM users WHERE username=?', (username,)).fetchone()
+        if row is None or not auth.verify_password(password, row['password_hash']):
+            time.sleep(0.3)
+            audit(db, username or '-', 'login.failed', username or '-')
+            db.commit()
+            return self.send({'error': 'Invalid username or password'}, 401)
+        token = auth.create_session(db, username, row['role'])
+        audit(db, username, 'login.success', username)
+        db.commit()
+        return self.send({'username': username, 'role': row['role']}, headers={'Set-Cookie': auth.cookie_header(token, auth.SESSION_LIFETIME)})
+
+    def logout(self, db):
+        token = self.session_token()
+        if token: auth.delete_session(db, token)
+        db.commit()
+        return self.send({'status': 'ok'}, headers={'Set-Cookie': auth.cookie_header('', 0)})
 
 def worker(server):
     while not server.stop_worker.wait(0.5):
@@ -193,9 +295,18 @@ def worker(server):
             if row: db.execute("UPDATE runs SET status='running' WHERE id=?", (row['id'],))
         if row: execute(row['id'], server.settings['db'], server.settings)
 
+def bootstrap_admin(db_path, username, password):
+    with connect(db_path) as db:
+        # Bootstrap only runs while no accounts exist yet, so a password
+        # changed later through the API survives a restart with the old
+        # BASELINE_ADMIN_PASSWORD still set in the environment.
+        if db.execute('SELECT 1 FROM users').fetchone(): return
+        db.execute('INSERT INTO users(username,password_hash,role) VALUES(?,?,?)', (username, auth.hash_password(password), 'admin'))
+
 def make_server(settings, address=('127.0.0.1', 8090), start_worker=True):
     Path(settings['db']).parent.mkdir(parents=True, exist_ok=True)
     init(settings['db'])
+    bootstrap_admin(settings['db'], settings['admin_user'], settings['admin_password'])
     server = ThreadingHTTPServer(address, Handler)
     server.settings = settings
     server.stop_worker = threading.Event()

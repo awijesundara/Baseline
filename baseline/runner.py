@@ -11,14 +11,35 @@ from .store import connect, get, audit
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def _address_in_network(addr, network):
+    try: return addr in ipaddress.ip_network(network)
+    except TypeError: return False  # mismatched IPv4/IPv6 families never match, rather than raising
+
 def validate_address(address, networks):
     try: addr = ipaddress.ip_address(address)
     except ValueError: raise ValueError('Use a literal management IP address')
     if addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified:
         raise ValueError('Loopback, link-local, multicast and unspecified targets are forbidden')
-    if not any(addr in ipaddress.ip_network(n.strip()) for n in networks if n.strip()):
+    if not any(_address_in_network(addr, n.strip()) for n in networks if n.strip()):
         raise ValueError('Management IP is outside BASELINE_ALLOWED_NETWORKS')
     return str(addr)
+
+def ssh_common_args(settings):
+    # Host-key trust is pluggable: a static known_hosts file is the simple
+    # default, but a site with centrally managed host keys (e.g. FreeIPA/SSSD)
+    # can instead point BASELINE_KNOWN_HOSTS_COMMAND at a KnownHostsCommand
+    # helper such as sss_ssh_knownhostsproxy, so trust comes from that system
+    # instead of a file Baseline has to keep in sync. Client identity is
+    # similarly pluggable: an optional certificate file layers on top of the
+    # private key for CA-issued short-lived SSH certificates.
+    args = ['-o StrictHostKeyChecking=yes']
+    if settings.get('known_hosts_command'):
+        args.append('-o KnownHostsCommand=' + settings['known_hosts_command'])
+    else:
+        args.append('-o UserKnownHostsFile=' + settings['known_hosts'])
+    if settings.get('ssh_cert'):
+        args.append('-o CertificateFile=' + settings['ssh_cert'])
+    return ' '.join(args)
 
 def execute(run_id, db_path, settings):
     with connect(db_path) as db:
@@ -35,11 +56,11 @@ def execute(run_id, db_path, settings):
                 inventory['all']['children']['baseline_targets']['hosts'][host['id']] = {
                     'ansible_host': address, 'ansible_user': host['ssh_user'], 'ansible_port': host['port'],
                     'ansible_connection': 'ssh', 'ansible_ssh_private_key_file': settings['ssh_key'],
-                    'ansible_ssh_common_args': '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=' + settings['known_hosts'],
+                    'ansible_ssh_common_args': ssh_common_args(settings),
                 }
             inv = Path(tmp) / 'inventory.json'
             inv.write_text(json.dumps(inventory))
-            env = {k: v for k, v in os.environ.items() if not k.startswith('ANSIBLE_') and k not in {'BASELINE_ADMIN_TOKEN', 'BASELINE_INTEGRATION_TOKEN', 'BASELINE_READ_TOKEN'}}
+            env = {k: v for k, v in os.environ.items() if not k.startswith('ANSIBLE_') and k not in {'BASELINE_ADMIN_USERNAME', 'BASELINE_ADMIN_PASSWORD', 'BASELINE_INTEGRATION_TOKEN'}}
             env.update({'ANSIBLE_CONFIG': str(ROOT / 'ansible/ansible.cfg'),
                         'ANSIBLE_CALLBACK_PLUGINS': str(ROOT / 'ansible/callback_plugins'),
                         'ANSIBLE_CALLBACKS_ENABLED': 'baseline', 'ANSIBLE_HOST_KEY_CHECKING': 'True',

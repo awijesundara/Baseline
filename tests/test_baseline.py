@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from unittest.mock import patch
 from baseline.policy import evaluate, validate
-from baseline.runner import execute, validate_address
+from baseline.runner import execute, validate_address, ssh_common_args
 from baseline.server import make_server, verification
 from baseline.store import connect, init
 
@@ -35,6 +35,18 @@ class PolicyTests(unittest.TestCase):
     def test_numeric_type_confusion_is_unknown(self):
         p={'name':'n','checks':[{'id':'n','field':'memory.hugepages_free','op':'gte','expected':2}]}
         self.assertEqual(evaluate(p,{'memory.hugepages_free':'20'})['checks'][0]['status'],'unknown')
+    def test_ssh_common_args_default_known_hosts_file(self):
+        args = ssh_common_args({'known_hosts':'/etc/baseline/known_hosts'})
+        self.assertIn('UserKnownHostsFile=/etc/baseline/known_hosts', args)
+        self.assertNotIn('KnownHostsCommand', args)
+    def test_ssh_common_args_freeipa_style_command_and_cert(self):
+        args = ssh_common_args({'known_hosts':'', 'known_hosts_command':'/usr/bin/sss_ssh_knownhostsproxy -p 22 %H', 'ssh_cert':'/run/secrets/id_ed25519-cert.pub'})
+        self.assertIn('KnownHostsCommand=/usr/bin/sss_ssh_knownhostsproxy -p 22 %H', args)
+        self.assertIn('CertificateFile=/run/secrets/id_ed25519-cert.pub', args)
+        self.assertNotIn('UserKnownHostsFile', args)
+    def test_mixed_address_families_never_match_instead_of_raising(self):
+        self.assertEqual(validate_address('10.1.2.3',['10.0.0.0/8','2001:db8::/32']),'10.1.2.3')
+        with self.assertRaises(ValueError):validate_address('10.1.2.3',['2001:db8::/32'])
     def test_network_boundary(self):
         for address in ('127.0.0.1','169.254.169.254','::1','hostname','10.9.1.2;whoami','192.168.1.2'):
             with self.assertRaises(ValueError):validate_address(address,['10.0.0.0/8'])
@@ -50,14 +62,24 @@ class PolicyTests(unittest.TestCase):
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
-        self.settings={'db':self.tmp.name+'/db.sqlite','tokens':{'admin':'a'*40,'reader':'r'*40,'integration':'i'*40},'networks':['10.0.0.0/8'],'ansible':'missing-ansible','ssh_key':'/missing/key','known_hosts':'/missing/known','timeout':2}
+        self.settings={'db':self.tmp.name+'/db.sqlite','admin_user':'admin','admin_password':'a'*16,'integration_token':'i'*40,'networks':['10.0.0.0/8'],'ansible':'missing-ansible','ssh_key':'/missing/key','known_hosts':'/missing/known','timeout':2}
         self.server=make_server(self.settings,('127.0.0.1',0),False)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
         self.url='http://127.0.0.1:'+str(self.server.server_port)
+        self.sessions={'admin':self._login('admin',self.settings['admin_password'])}
+        self.request('/api/users',{'username':'reader1','password':'r'*12,'role':'reader'},role='admin')
+        self.sessions['reader']=self._login('reader1','r'*12)
     def tearDown(self):
         self.server.shutdown();self.server.server_close();self.thread.join();self.tmp.cleanup()
+    def _login(self,username,password):
+        req=Request(self.url+'/api/login',data=json.dumps({'username':username,'password':password}).encode(),headers={'Content-Type':'application/json'})
+        with urlopen(req) as r:return r.headers.get('Set-Cookie').split(';')[0]
     def request(self,path,body=None,role='admin',headers=None):
-        req=Request(self.url+path,data=json.dumps(body).encode() if body is not None else None,headers={'Authorization':'Bearer '+self.settings['tokens'].get(role,''),'Content-Type':'application/json',**(headers or {})})
+        # Real browsers send Origin on every fetch()/XHR POST, same-origin or
+        # not, so the harness mirrors that by default; individual tests
+        # override it via `headers` to exercise cross-origin rejection.
+        auth_headers={'Authorization':'Bearer '+self.settings['integration_token']} if role=='integration' else ({'Cookie':self.sessions[role]} if role in self.sessions else {})
+        req=Request(self.url+path,data=json.dumps(body).encode() if body is not None else None,headers={'Origin':self.url,**auth_headers,'Content-Type':'application/json',**(headers or {})})
         try:
             with urlopen(req) as r:return r.status,json.load(r)
         except HTTPError as e:return e.code,json.load(e)
@@ -70,6 +92,12 @@ class ApiTests(unittest.TestCase):
     def finish(self,run,status='pass',**changes):
         run.update(started_at=time.time(),completed_at=time.time(),status=status,**changes)
         with connect(self.settings['db']) as db:db.execute('UPDATE runs SET status=?,document=? WHERE id=?',(status,json.dumps(run),run['id']))
+    def test_health_and_catalog_report_version(self):
+        req=Request(self.url+'/health')
+        with urlopen(req) as r: body=json.load(r)
+        self.assertIn('version',body)
+        _,catalog=self.request('/api/catalog')
+        self.assertEqual(catalog['version'],body['version'])
     def test_auth_and_scopes(self):
         self.assertEqual(self.request('/api/hosts',role='missing')[0],401)
         self.assertEqual(self.request('/api/hosts',{},role='reader')[0],403)
@@ -77,6 +105,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.request('/api/hosts',role='reader')[0],200)
     def test_cross_origin_rejected(self):
         self.assertEqual(self.request('/api/baselines',POLICY,headers={'Origin':'https://evil.invalid'})[0],403)
+    def test_cross_origin_missing_with_cookie_rejected(self):
+        cookie=self.sessions['admin']
+        req=Request(self.url+'/api/baselines',data=json.dumps(POLICY).encode(),headers={'Cookie':cookie,'Content-Type':'application/json'})
+        with self.assertRaises(HTTPError) as ctx:urlopen(req)
+        self.assertEqual(ctx.exception.code,403)
+    def test_cross_origin_missing_with_bearer_token_allowed(self):
+        status,_=self.request('/api/runs',{'binding_id':'nonexistent'},role='integration')
+        self.assertEqual(status,400)
     def test_binding_rejects_duplicate_hosts(self):
         b=self.setup_binding();b['host_ids']*=2
         self.assertEqual(self.request('/api/bindings',b)[0],400)
@@ -126,11 +162,52 @@ class ApiTests(unittest.TestCase):
         b=self.setup_binding();_,run=self.request('/api/runs',{'binding_id':b['id']})
         def process(argv,**kwargs):
             Path(kwargs['env']['BASELINE_EVIDENCE_FILE']).write_text(json.dumps({'host':b['host_ids'][0],'facts':{'kernel.release':'5.14.0-target'}})+'\n')
-            self.assertNotIn('BASELINE_ADMIN_TOKEN',kwargs['env'])
+            self.assertNotIn('BASELINE_ADMIN_PASSWORD',kwargs['env'])
             class Proc:
                 def wait(self,timeout=None):return 0
             return Proc()
         with patch('baseline.runner.subprocess.Popen',side_effect=process):execute(run['id'],self.settings['db'],self.settings)
         self.assertTrue(self.request('/api/bindings/'+b['id']+'/verification')[1]['verified'])
+
+    def test_login_requires_correct_password(self):
+        status,body=self.request('/api/login',{'username':'admin','password':'wrong-password'},role=None)
+        self.assertEqual(status,401);self.assertIn('error',body)
+    def test_logout_invalidates_session(self):
+        cookie=self._login('reader1','r'*12)
+        req=Request(self.url+'/api/logout',data=b'{}',headers={'Cookie':cookie,'Origin':self.url,'Content-Type':'application/json'})
+        with urlopen(req):pass
+        req=Request(self.url+'/api/hosts',headers={'Cookie':cookie})
+        with self.assertRaises(HTTPError) as ctx:urlopen(req)
+        self.assertEqual(ctx.exception.code,401)
+    def test_reader_cannot_create_users(self):
+        self.assertEqual(self.request('/api/users',{'username':'x','password':'y'*12,'role':'reader'},role='reader')[0],403)
+    def test_duplicate_username_rejected(self):
+        status,_=self.request('/api/users',{'username':'reader1','password':'z'*12,'role':'reader'},role='admin')
+        self.assertEqual(status,400)
+    def test_short_password_rejected(self):
+        status,_=self.request('/api/users',{'username':'shortpw','password':'short','role':'reader'},role='admin')
+        self.assertEqual(status,400)
+    def test_revoke_deletes_user_and_session(self):
+        cookie=self._login('reader1','r'*12)
+        status,_=self.request('/api/users/reader1/revoke',{},role='admin')
+        self.assertEqual(status,200)
+        req=Request(self.url+'/api/hosts',headers={'Cookie':cookie})
+        with self.assertRaises(HTTPError) as ctx:urlopen(req)
+        self.assertEqual(ctx.exception.code,401)
+    def test_cannot_revoke_only_admin(self):
+        status,_=self.request('/api/users/admin/revoke',{},role='admin')
+        self.assertEqual(status,400)
+    def test_reset_password_invalidates_old_session_and_sets_new(self):
+        old_cookie=self._login('reader1','r'*12)
+        status,_=self.request('/api/users/reader1/reset',{'password':'q'*12},role='admin')
+        self.assertEqual(status,200)
+        req=Request(self.url+'/api/hosts',headers={'Cookie':old_cookie})
+        with self.assertRaises(HTTPError) as ctx:urlopen(req)
+        self.assertEqual(ctx.exception.code,401)
+        new_cookie=self._login('reader1','q'*12)
+        self.assertTrue(new_cookie)
+    def test_reader_cannot_revoke_or_reset(self):
+        self.assertEqual(self.request('/api/users/admin/revoke',{},role='reader')[0],403)
+        self.assertEqual(self.request('/api/users/admin/reset',{'password':'z'*12},role='reader')[0],403)
 
 if __name__=='__main__':unittest.main()
