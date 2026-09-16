@@ -1,0 +1,16 @@
+---
+- name: Roll back a failed OS package upgrade
+  hosts: baseline_targets
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Roll back OS package upgrade
+      ansible.builtin.script:
+        cmd: "rollback.py {{ baseline_transaction_id }} {{ baseline_previous_kernel }}"
+        executable: /bin/sh
+      when: baseline_os_family | default('linux') == 'linux'
+      changed_when: true
+    - name: Reboot after rollback
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+      when: baseline_os_family | default('linux') == 'linux' and baseline_reboot | default(false) | bool

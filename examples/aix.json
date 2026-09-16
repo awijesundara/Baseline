@@ -1,0 +1,19 @@
+{
+  "name": "AIX OS upgrade acceptance",
+  "checks": [
+    {
+      "id": "os",
+      "field": "os.id",
+      "op": "eq",
+      "expected": "aix",
+      "required": true
+    },
+    {
+      "id": "version",
+      "field": "os.version",
+      "op": "eq",
+      "expected": "REPLACE_APPROVED_OS_VERSION",
+      "required": true
+    }
+  ]
+}

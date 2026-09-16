@@ -1,0 +1,75 @@
+{
+  "name": "Red Hat Enterprise Linux 7 upgrade acceptance",
+  "checks": [
+    {
+      "id": "distribution",
+      "field": "os.id",
+      "op": "eq",
+      "expected": "rhel",
+      "required": true
+    },
+    {
+      "id": "release",
+      "field": "os.version",
+      "op": "eq",
+      "expected": "7.REPLACE_MINOR",
+      "required": true
+    },
+    {
+      "id": "running-kernel",
+      "field": "kernel.release",
+      "op": "eq",
+      "expected": "REPLACE_APPROVED_UNAME_R",
+      "required": true
+    },
+    {
+      "id": "installed-kernel",
+      "field": "kernel.packages",
+      "op": "contains",
+      "expected": "REPLACE_APPROVED_UNAME_R",
+      "required": true
+    },
+    {
+      "id": "default-boot-kernel",
+      "field": "kernel.default",
+      "op": "eq",
+      "expected": "/boot/vmlinuz-REPLACE_APPROVED_UNAME_R",
+      "required": true
+    },
+    {
+      "id": "kernel-devel",
+      "field": "kernel.headers_running",
+      "op": "eq",
+      "expected": "kernel-devel-REPLACE_APPROVED_UNAME_R",
+      "required": true
+    },
+    {
+      "id": "kernel-taint",
+      "field": "kernel.tainted",
+      "op": "eq",
+      "expected": 0,
+      "required": true
+    },
+    {
+      "id": "dkms-installed",
+      "field": "dkms.status",
+      "op": "contains",
+      "expected": "REPLACE_MODULE_VERSION_RUNNING_KERNEL_ARCH_INSTALLED",
+      "required": true
+    },
+    {
+      "id": "failed-services",
+      "field": "services.failed",
+      "op": "eq",
+      "expected": "",
+      "required": true
+    },
+    {
+      "id": "centos7-lifecycle",
+      "field": "os.centos7_eol",
+      "op": "eq",
+      "expected": false,
+      "required": true
+    }
+  ]
+}

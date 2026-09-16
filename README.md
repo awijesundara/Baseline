@@ -27,6 +27,14 @@ an authenticated verification contract for ServiceOps and FlowOps.
   revision hashes, persistent reports, JSON downloads, and audit events.
 - **Ticket contract:** bind a ServiceOps/FlowOps reference to exact hosts and a
   baseline; only a fresh, complete post-upgrade pass can return `verified: true`.
+- **Upgrade execution (Linux dnf/yum) with automatic rollback:** plan a package
+  upgrade as a dry run first — nothing changes until you review it and confirm.
+  A confirmed job upgrades hosts in batches, reboots and waits if the kernel
+  changed, then re-verifies against your baseline. A batch that fails
+  verification is automatically rolled back (`dnf history undo` + restore the
+  previous default kernel) and no later batch starts. Windows/apt/AIX
+  execution, filesystem snapshotting, and network-device firmware upgrade are
+  not implemented yet — see `docs/IMPLEMENTATION_PLAN.md`.
 
 This is a single-controller development application. Native ServiceOps/FlowOps
 buttons, production identity, and remote fleet acceptance are still outstanding.
@@ -58,6 +66,12 @@ shared access; this preview does not provide production SSO or user accounts.
    architecture, entitlement and upgrade dependencies before choosing targets.
 5. Create an immutable **Baseline policy** using a starter and approved values.
 6. Bind an upgrade ticket and collect again after the upgrade completion boundary.
+7. To have Baseline perform the upgrade itself: select servers → **Upgrade
+   selected**, choose the target baseline and an optional batch size, and
+   save. This only plans — review the dry-run package diff in **Upgrade
+   jobs**, then **Confirm and run**. A batch that fails its post-upgrade
+   check against the baseline is rolled back automatically; check the job's
+   detail view for the per-host result. Linux (dnf/yum) hosts only today.
 
 ### CSV format
 
@@ -107,10 +121,15 @@ and foreign-controller links are rejected. Use a read-only BMC account.
 | `BASELINE_ANSIBLE` | Ansible executable, default `ansible-playbook`. |
 | `BASELINE_DB` | SQLite path, default `data/baseline.db`. |
 | `BASELINE_BIND`, `BASELINE_PORT` | Default `127.0.0.1:8090`. |
+| `BASELINE_UPGRADE_TIMEOUT` | Seconds allowed per upgrade/rollback batch (covers the reboot wait), default `900`. |
 
-Ansible transfers a temporary collector and cleans up its temporary files. It
-installs no daemon, modifies no OS configuration and performs no upgrades.
-Managed Linux/Unix hosts need a compatible existing Python interpreter and SSH;
+Collection (inventory discovery, scans, verification) transfers a temporary
+collector and cleans up its temporary files; it installs no daemon and modifies
+no OS configuration. An upgrade job is the one deliberate exception: after you
+explicitly confirm its dry-run plan, it does run `dnf upgrade` (and, if it
+fails its post-upgrade check, `dnf history undo`) on the exact package set the
+plan named — see "Upgrade execution" above. Managed Linux/Unix hosts need a
+compatible existing Python interpreter and SSH;
 Windows needs configured OpenSSH with PowerShell as its default shell. The
 controller uses Ansible 2.18 for Windows SSH support. Optional host utilities
 (`dkms`, `rpm`, `grubby`, `ethtool`, etc.) must already exist to supply their facts.

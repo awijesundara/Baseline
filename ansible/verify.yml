@@ -1,5 +1,5 @@
 ---
-- name: Collect OSBaseline evidence without changing host configuration
+- name: Collect Baseline evidence without changing host configuration
   hosts: baseline_targets
   gather_facts: false
   become: false
@@ -8,6 +8,9 @@
       ansible.builtin.script:
         cmd: collect.py
         executable: /bin/sh
+      when: baseline_os_family | default('linux') != 'windows'
       changed_when: false
-      register: baseline_snapshot
-      no_log: true
+    - name: Read Windows operating system and hardware state
+      ansible.builtin.raw: "{{ lookup('ansible.builtin.file', 'collect_windows.ps1') }}"
+      when: baseline_os_family | default('linux') == 'windows'
+      changed_when: false

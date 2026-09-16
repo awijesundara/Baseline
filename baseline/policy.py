@@ -4,6 +4,8 @@ import json
 import math
 
 FIELDS = {
+    'hardware.manufacturer', 'hardware.model', 'hardware.serial', 'hardware.health', 'hardware.power',
+    'firmware.versions', 'firmware.inventory', 'os.name', 'os.family',
     'os.id', 'os.version', 'kernel.release', 'kernel.cmdline', 'kernel.tainted',
     'boot.id', 'bios.version', 'bios.date', 'cpu.isolated', 'cpu.nohz_full',
     'cpu.governors', 'memory.hugepages_total', 'memory.hugepages_free',

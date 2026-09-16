@@ -1,0 +1,12 @@
+---
+- name: Dry-run pending OS package upgrades without changing hosts
+  hosts: baseline_targets
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Plan OS package upgrade
+      ansible.builtin.script:
+        cmd: plan.py
+        executable: /bin/sh
+      when: baseline_os_family | default('linux') == 'linux'
+      changed_when: false

@@ -34,12 +34,20 @@ def command(*argv):
     except OSError: return None
 
 def collect():
-    facts = {'kernel.release': platform.release(), 'cpu.architecture': platform.machine()}
+    facts = {'kernel.release': platform.release(), 'cpu.architecture': platform.machine(), 'os.family': platform.system()}
+    if platform.system() != 'Linux':
+        facts.update({'os.id': platform.system().lower(), 'os.name': platform.system(), 'os.version': platform.release()})
+        if platform.system() == 'AIX':
+            facts['os.version'] = command('oslevel', '-s')
+            facts['hardware.model'] = command('uname', '-M')
+            facts['bios.version'] = command('lsattr', '-El', 'sys0', '-a', 'fwversion', '-F', 'value')
+        return facts
     release = read('/etc/os-release') or ''
     values = dict(line.split('=', 1) for line in release.splitlines() if '=' in line)
-    facts.update({'os.id': values.get('ID', '').strip('"'), 'os.version': values.get('VERSION_ID', '').strip('"')})
+    facts.update({'os.id': values.get('ID', '').strip('"'), 'os.version': values.get('VERSION_ID', '').strip('"'), 'os.name': values.get('PRETTY_NAME', '').strip('"')})
     paths = {'kernel.cmdline': '/proc/cmdline', 'boot.id': '/proc/sys/kernel/random/boot_id',
-             'bios.version': '/sys/class/dmi/id/bios_version', 'bios.date': '/sys/class/dmi/id/bios_date',
+             'hardware.manufacturer': '/sys/class/dmi/id/sys_vendor', 'hardware.model': '/sys/class/dmi/id/product_name',
+             'hardware.serial': '/sys/class/dmi/id/product_serial', 'bios.version': '/sys/class/dmi/id/bios_version', 'bios.date': '/sys/class/dmi/id/bios_date',
              'cpu.isolated': '/sys/devices/system/cpu/isolated', 'cpu.nohz_full': '/sys/devices/system/cpu/nohz_full',
              'memory.thp': '/sys/kernel/mm/transparent_hugepage/enabled'}
     facts.update({k: read(v) for k, v in paths.items()})
