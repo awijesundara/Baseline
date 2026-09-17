@@ -1,0 +1,33 @@
+{
+  "name": "Server firmware acceptance \u2014 exact model required",
+  "checks": [
+    {
+      "id": "manufacturer",
+      "field": "hardware.manufacturer",
+      "op": "eq",
+      "expected": "REPLACE_COLLECTED_MANUFACTURER",
+      "required": true
+    },
+    {
+      "id": "model",
+      "field": "hardware.model",
+      "op": "eq",
+      "expected": "REPLACE_EXACT_MODEL",
+      "required": true
+    },
+    {
+      "id": "bios",
+      "field": "bios.version",
+      "op": "eq",
+      "expected": "REPLACE_APPROVED_BIOS",
+      "required": true
+    },
+    {
+      "id": "component",
+      "field": "firmware.versions",
+      "op": "contains",
+      "expected": "REPLACE_ENABLED_COMPONENT_ID:REPLACE_APPROVED_VERSION",
+      "required": true
+    }
+  ]
+}

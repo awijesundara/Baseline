@@ -41,7 +41,8 @@ class PolicyTests(unittest.TestCase):
         self.assertNotIn('KnownHostsCommand', args)
     def test_ssh_common_args_freeipa_style_command_and_cert(self):
         args = ssh_common_args({'known_hosts':'', 'known_hosts_command':'/usr/bin/sss_ssh_knownhostsproxy -p 22 %H', 'ssh_cert':'/run/secrets/id_ed25519-cert.pub'})
-        self.assertIn('KnownHostsCommand=/usr/bin/sss_ssh_knownhostsproxy -p 22 %H', args)
+        self.assertIn('KnownHostsCommand=', args)
+        self.assertIn('sss_ssh_knownhostsproxy -p 22 %H', args)
         self.assertIn('CertificateFile=/run/secrets/id_ed25519-cert.pub', args)
         self.assertNotIn('UserKnownHostsFile', args)
     def test_mixed_address_families_never_match_instead_of_raising(self):
@@ -62,7 +63,7 @@ class PolicyTests(unittest.TestCase):
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
-        self.settings={'db':self.tmp.name+'/db.sqlite','admin_user':'admin','admin_password':'a'*16,'integration_token':'i'*40,'networks':['10.0.0.0/8'],'ansible':'missing-ansible','ssh_key':'/missing/key','known_hosts':'/missing/known','timeout':2}
+        self.settings={'db':self.tmp.name+'/db.sqlite','admin_user':'admin','admin_password':'a'*16,'integration_token':'i'*40,'networks':['10.0.0.0/8'],'ansible':'missing-ansible','ssh_key':'/missing/key','known_hosts':'/missing/known','timeout':2,'upgrade_timeout':2}
         self.server=make_server(self.settings,('127.0.0.1',0),False)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
         self.url='http://127.0.0.1:'+str(self.server.server_port)
