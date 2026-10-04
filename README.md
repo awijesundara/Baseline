@@ -3,6 +3,21 @@
 Agentless fleet inventory and OS/kernel/firmware verification, with a web UI and
 an authenticated verification contract for ServiceOps and FlowOps.
 
+[![CI](https://github.com/awijesundara/Baseline/actions/workflows/ci.yml/badge.svg)](https://github.com/awijesundara/Baseline/actions/workflows/ci.yml)
+[![Last commit](https://img.shields.io/github/last-commit/awijesundara/Baseline)](https://github.com/awijesundara/Baseline/commits/main)
+[![Top language](https://img.shields.io/github/languages/top/awijesundara/Baseline)](https://github.com/awijesundara/Baseline)
+[![Code size](https://img.shields.io/github/languages/code-size/awijesundara/Baseline)](https://github.com/awijesundara/Baseline)
+[![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](requirements.txt)
+[![Ansible](https://img.shields.io/badge/ansible--core-2.18-EE0000?logo=ansible&logoColor=white)](ansible)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/fleet-desktop.png" alt="Fleet inventory"><br><sub>Fleet inventory</sub></td>
+<td width="50%"><img src="docs/screenshots/upgrade-job-detail.png" alt="Upgrade job"><br><sub>Upgrade job detail</sub></td>
+</tr>
+</table>
+
 ## What is implemented
 
 - **Fleet inventory:** add one server, paste/upload CSV, preview validation errors,
@@ -213,8 +228,7 @@ python tools/check_ansible.py              # local controller aliases only
 PYTHONPATH=. python tools/refresh_vendor_evidence.py
 ```
 
-See [validation evidence](docs/VALIDATION.md) and
-[vendor retrieval results](docs/vendor-retrieval.json). No production host or BMC
+See [vendor retrieval results](docs/vendor-retrieval.json). No production host or BMC
 was supplied for this implementation. Supported adapter code and fixture tests
 are not live certification of every OS/server model.
 
@@ -227,4 +241,15 @@ are not live certification of every OS/server model.
 - [HPE firmware inventory](https://servermanagementportal.ext.hpe.com/docs/references_and_material/blogposts/firmware_updates/part3/firmware_update_part3)
 - [IBM Fix Central](https://www.ibm.com/support/fixcentral/)
 - [Ansible Windows SSH requirements](https://docs.ansible.com/projects/ansible/latest/os_guide/windows_ssh.html)
-# Baseline
+
+## Project statistics
+
+| Metric | Value |
+|---|---|
+| Tracked files | 55 |
+| Lines of code (non-blank) | 2,453 |
+| Languages | Python 1,932, JavaScript 257, CSS 160, YAML 60, HTML 34 |
+| Automated tests | 59 |
+| Commits | 6 |
+
+CI runs the unit suite, compiles every module and syntax-checks the web UI on each push to `main`.
